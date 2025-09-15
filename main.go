@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -63,6 +64,50 @@ func main() {
 	// Add the /reset endpoint to the main function
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
 	mux.HandleFunc("/admin/reset", methodNotAllowed)
+
+	// Add a new endpoint that accepts POST requests at /api/validate_chirp. It should expect a JSON body.
+	mux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
+		// init struct to hold incoming JSON data
+		type chirp struct {
+			Body string `json:"body"`
+		}
+
+		// decode the JSON body into the chirp struct
+		decoder := json.NewDecoder(r.Body)
+		var c chirp
+		err := decoder.Decode(&c)
+
+		//
+
+		if err != nil {
+			log.Printf("error decoding JSON: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate the chirp body length
+		if len(c.Body) > 140 {
+			// If the chirp body is too long, respond with a 400 status code and a JSON response indicating the error
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			resp := map[string]string{"error": "Chirp is too long"}
+			jsonResp, _ := json.Marshal(resp)
+			w.Write(jsonResp)
+			return
+		}
+
+		// if successful, respond with a 200 status code and a JSON response indicating the request is valid
+		// Example: {"valid": true}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		dat, _ := json.Marshal(map[string]bool{"valid": true})
+		w.Write(dat)
+	})
+
+	mux.HandleFunc("/api/validate_chirp", methodNotAllowed)
 
 	// Use the server ListenAndServe method to start the server
 	log.Println("Starting server on :8080")
