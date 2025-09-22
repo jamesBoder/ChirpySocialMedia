@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sync/atomic"
 )
 
@@ -99,15 +100,30 @@ func main() {
 			return
 		}
 
-		// if successful, respond with a 200 status code and a JSON response indicating the request is valid
-		// Example: {"valid": true}
-		w.Header().Set("Content-Type", "application/json")
+		// IF lenght validation passed replace profane words with 4 asterisks. the words are "kerfuffle", "sharbert", and "fornax". Match upper and lower case versions but not punctuation-attached versions. Return the cleaned chirp in the JSON response
+		// Example: {"valid": true, "cleaned_chirp": "This is a **** example"}
+		profaneWords := []string{"kerfuffle", "sharbert", "fornax"}
+		cleanedChirp := c.Body
+		for _, word := range profaneWords {
+			//replacer := fmt.Sprintf("(?i)%s", word) // case-insensitive regex
+			// Build cleanedChirp using case-insensitive, whole-word regex for each profane word using (?i)\b<word>\b
+			re := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, word))
+			cleanedChirp = re.ReplaceAllString(cleanedChirp, "****")
+
+		}
+		// Respond with a 200 status code and a JSON response indicating the chirp is valid and the cleaned chirp
+		// Example: {"cleaned_chirp": "This is a **** example"}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		dat, _ := json.Marshal(map[string]bool{"valid": true})
-		w.Write(dat)
+		resp := map[string]any{
+			"cleaned_body": cleanedChirp,
+		}
+		jsonResp, _ := json.Marshal(resp)
+		w.Write(jsonResp)
+
 	})
 
-	mux.HandleFunc("/api/validate_chirp", methodNotAllowed)
+	//mux.HandleFunc("/api/validate_chirp", methodNotAllowed)
 
 	// Use the server ListenAndServe method to start the server
 	log.Println("Starting server on :8080")
