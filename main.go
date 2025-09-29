@@ -9,6 +9,9 @@ import (
 	"os"
 	"regexp"
 	"sync/atomic"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/jamesboder/ChirpySocialMedia/internal/database"
 	"github.com/joho/godotenv"
@@ -22,6 +25,10 @@ func main() {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found")
 	}
+
+	// Debug log the environment variables ****
+	log.Printf("DB_URL=%q", os.Getenv("DB_URL"))
+	log.Printf("PLATFORM=%q", os.Getenv("PLATFORM"))
 
 	// Connect to the database
 	dbURL := os.Getenv("DB_URL")
@@ -37,6 +44,13 @@ func main() {
 
 	defer db.Close()
 
+	// Read PLATFORM environment variable
+	platform := os.Getenv("PLATFORM")
+	if platform == "" {
+		log.Println("PLATFORM environment variable not set, defaulting to dev")
+		platform = "dev"
+	}
+
 	// Create a new http.ServeMux
 	mux := http.NewServeMux()
 
@@ -50,6 +64,7 @@ func main() {
 	apiCfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		dbQueries:      database.New(db),
+		platform:       platform,
 	}
 
 	// use NewServeMux .Handle() to add a handler for the root path "/". Use .FileServer as the handler
@@ -75,13 +90,6 @@ func main() {
 
 	mux.HandleFunc("/api/healthz", methodNotAllowed)
 
-	//mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-	//w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	//w.WriteHeader(200)
-	//w.Write([]byte("OK"))
-	//
-	//})
-
 	// Add the /metrics endpoint to the main function that responds to GET requests only. returns HTML to be rendered in the browser
 
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
@@ -93,25 +101,51 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
 	mux.HandleFunc("/admin/reset", methodNotAllowed)
 
-	// Add a new endpoint that accepts POST requests at /api/validate_chirp. It should expect a JSON body.
-	mux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
+	// Add POST /api/chirps handler that accepts JSON body with "body" field, if chirp is valid save to database with id, created_at, updated_at, body, user_id (use any valid user_id from users table). Return 201 with JSON response containing chirp data. If invalid return 400 with JSON error message.
+	mux.HandleFunc("POST /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+
 		// init struct to hold incoming JSON data
 		type chirp struct {
-			Body string `json:"body"`
+			Body   string `json:"body"`
+			UserID string `json:"user_id"`
 		}
 
-		// decode the JSON body into the chirp struct
+		// init struct to hold outgoing JSON data
+		type chirpResponse struct {
+			ID        string `json:"id"`
+			Body      string `json:"body"`
+			UserID    string `json:"user_id"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+
+		// decode the JSON body and user_id into the chirp struct
 		decoder := json.NewDecoder(r.Body)
 		var c chirp
 		err := decoder.Decode(&c)
-
-		//
-
 		if err != nil {
 			log.Printf("error decoding JSON: %v", err)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
 			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate c.Body == "". if invalid respond with 400 status code
+		if c.Body == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Chirp body is required"})
+			w.Write(dat)
+			return
+		}
+
+		// if user_id is empty respond with 400 status code
+		if c.UserID == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "User ID is required"})
 			w.Write(dat)
 			return
 		}
@@ -138,17 +172,113 @@ func main() {
 			cleanedChirp = re.ReplaceAllString(cleanedChirp, "****")
 
 		}
-		// Respond with a 200 status code and a JSON response indicating the chirp is valid and the cleaned chirp
-		// Example: {"cleaned_chirp": "This is a **** example"}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		resp := map[string]any{
-			"cleaned_body": cleanedChirp,
+
+		uid, err := uuid.Parse(c.UserID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
+			return
 		}
-		jsonResp, _ := json.Marshal(resp)
-		w.Write(jsonResp)
+
+		// Insert the chirp into the database
+		newChirp, err := apiCfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
+			Body:   cleanedChirp,
+			UserID: uid,
+		})
+		if err != nil {
+			log.Printf("error inserting chirp into database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Respond with a 201 status code and a JSON response containing the chirp data
+		resp := chirpResponse{
+			ID:        newChirp.ID.String(),
+			Body:      newChirp.Body,
+			UserID:    newChirp.UserID.String(),
+			CreatedAt: newChirp.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: newChirp.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(resp)
 
 	})
+	mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
+
+	//})
+
+	// Add a new endpoint to your server POST /api/users that accepts an email as JSON in body and returns user's ID, email and timestamps
+	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
+		log.Println("POST /api/users start")
+		defer log.Println("POST /api/users end")
+
+		// init struct to hold incoming JSON data
+		type userRequest struct {
+			Email string `json:"email"`
+		}
+		// init struct to hold outgoing JSON data
+		type userResponse struct {
+			ID        string `json:"id"`
+			Email     string `json:"email"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+		// decode the JSON body into the userRequest struct
+		decoder := json.NewDecoder(r.Body)
+		var ur userRequest
+
+		err := decoder.Decode(&ur)
+		if err != nil {
+			log.Printf("error decoding JSON: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate ur.Email == "". if invalid respond with 400 status code
+		if ur.Email == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Email is required"})
+			w.Write(dat)
+			return
+		}
+
+		// Debug log the email being created
+		log.Printf("CreateUser arg email=%q", ur.Email)
+
+		// Insert the user into the database
+		user, err := apiCfg.dbQueries.CreateUser(r.Context(), ur.Email)
+		if err != nil {
+			log.Printf("error inserting user into database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Respond with a 201 status code and a JSON response containing the user's ID, email, and timestamps
+
+		resp := userResponse{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(resp)
+
+	})
+
+	// Handle non-POST requests to /api/users with 405
+	mux.HandleFunc("/api/users", methodNotAllowed)
 
 	//mux.HandleFunc("/api/validate_chirp", methodNotAllowed)
 
@@ -165,6 +295,8 @@ func main() {
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
+	// add a field to story PLATFORM environment variable
+	platform string
 }
 
 // Create a middleware method on the apiConfig struct that increments the fileserverHits counter every time it's called
@@ -193,14 +325,47 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 // Create /reset handler that resets the fileserverHits counter to 0
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
+	//debugging logs *****
+	log.Println("POST /admin/reset start")
+	defer log.Println("POST /admin/reset end")
+
+	// if not dev -> 403 JSON error, return
+	if cfg.platform != "dev" {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{"error": "forbidden"})
+		return
+	}
+
+	// call cfg.dbQueries.DeleteAllUsers(r.Context()), handle error 500
+	log.Println("calling DeleteAllUsers")
+	if err := cfg.dbQueries.DeleteAllUsers(r.Context()); err != nil {
+		log.Printf("DeleteAllUsers error: %v", err)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Something went wrong"})
+		return
+	}
+
+	// reset fileserverHits to 0
 	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("Hits counter reset to 0"))
+
 }
+
+// Add POST /api/chirps handler that accepts JSON body with "body" field, if chirp is valid save to database with id, created_at, updated_at, body, user_id (use any valid user_id from users table). Return 201 with JSON response containing chirp data. If invalid return 400 with JSON error message.
 
 // methodNotAllowed responds with a 405 Method Not Allowed status code
 func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+// writeJSON is a helper function to write JSON responses
+// go
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }
