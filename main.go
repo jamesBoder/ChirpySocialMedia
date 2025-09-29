@@ -1,15 +1,41 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"sync/atomic"
+
+	"github.com/jamesboder/ChirpySocialMedia/internal/database"
+	"github.com/joho/godotenv"
+
+	_ "github.com/lib/pq"
 )
 
 func main() {
+
+	// call godotenv
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found")
+	}
+
+	// Connect to the database
+	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("DB_URL environment variable not set")
+	}
+
+	// Open a connection to the database
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Error opening database: %v", err)
+	}
+
+	defer db.Close()
 
 	// Create a new http.ServeMux
 	mux := http.NewServeMux()
@@ -23,6 +49,7 @@ func main() {
 	// Create an instance of the apiConfig struct
 	apiCfg := &apiConfig{
 		fileserverHits: atomic.Int32{},
+		dbQueries:      database.New(db),
 	}
 
 	// use NewServeMux .Handle() to add a handler for the root path "/". Use .FileServer as the handler
@@ -137,6 +164,7 @@ func main() {
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      *database.Queries
 }
 
 // Create a middleware method on the apiConfig struct that increments the fileserverHits counter every time it's called
