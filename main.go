@@ -206,9 +206,52 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 
 	})
-	mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
 
-	//})
+	//mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
+
+	// Add GET /api/chirps handler that returns a JSON array of all chirps in the database, ordered by created_at ascending order. Each chirp should include id, created_at, updated_at, body, user_id
+	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
+		// Define a struct to hold the chirp data
+		type chirpResponse struct {
+			ID        string `json:"id"`
+			Body      string `json:"body"`
+			UserID    string `json:"user_id"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+
+		// Get all chirps from the database ordered by created_at ascending
+		chirps, err := apiCfg.dbQueries.GetAllChirps(r.Context())
+		if err != nil {
+			log.Printf("error getting chirps from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Create a slice to hold the chirp responses
+		var resp []chirpResponse
+
+		// Loop through the chirps and append them to the response slice
+		for _, c := range chirps {
+			resp = append(resp, chirpResponse{
+				ID:        c.ID.String(),
+				Body:      c.Body,
+				UserID:    c.UserID.String(),
+				CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339),
+				UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
+			})
+		}
+
+		// Respond with a 200 status code and a JSON array of chirps
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	//mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
 
 	// Add a new endpoint to your server POST /api/users that accepts an email as JSON in body and returns user's ID, email and timestamps
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
