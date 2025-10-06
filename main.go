@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jamesboder/ChirpySocialMedia/internal/auth"
+
 	"github.com/google/uuid"
 
 	"github.com/jamesboder/ChirpySocialMedia/internal/database"
@@ -251,7 +253,54 @@ func main() {
 		json.NewEncoder(w).Encode(resp)
 	})
 
-	//mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
+	// Add a GET /api/chirps/{chirpID} endpoint that returns a single chirp by its ID. If the chirp is not found, return a 404 status code with a JSON error message.
+	mux.HandleFunc("GET /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		// Define a struct to hold the chirp data
+		type chirpResponse struct {
+			ID        string `json:"id"`
+			Body      string `json:"body"`
+			UserID    string `json:"user_id"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+
+		// Get string value of chirpID using http.Request.PathValue
+		chirpID := r.PathValue("chirpID")
+
+		// Parse chirpID
+		cid, err := uuid.Parse(chirpID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Invalid chirp ID"})
+			return
+		}
+
+		// Get the chirp from the database
+		chirp, err := apiCfg.dbQueries.GetChirp(r.Context(), cid)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Chirp not found"})
+				return
+			}
+			log.Printf("error getting chirp from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Respond with a 200 status code and a JSON object of the chirp
+		resp := chirpResponse{
+			ID:        chirp.ID.String(),
+			Body:      chirp.Body,
+			UserID:    chirp.UserID.String(),
+			CreatedAt: chirp.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: chirp.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	})
 
 	// Add a new endpoint to your server POST /api/users that accepts an email as JSON in body and returns user's ID, email and timestamps
 	mux.HandleFunc("POST /api/users", func(w http.ResponseWriter, r *http.Request) {
@@ -260,8 +309,10 @@ func main() {
 
 		// init struct to hold incoming JSON data
 		type userRequest struct {
-			Email string `json:"email"`
+			Email    string `json:"email"`
+			Password string `json:"password"`
 		}
+
 		// init struct to hold outgoing JSON data
 		type userResponse struct {
 			ID        string `json:"id"`
@@ -269,6 +320,7 @@ func main() {
 			CreatedAt string `json:"created_at"`
 			UpdatedAt string `json:"updated_at"`
 		}
+
 		// decode the JSON body into the userRequest struct
 		decoder := json.NewDecoder(r.Body)
 		var ur userRequest
@@ -283,6 +335,15 @@ func main() {
 			return
 		}
 
+		// Validate ur.Password == "". if invalid respond with 400 status code
+		if ur.Password == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Password is required"})
+			w.Write(dat)
+			return
+		}
+
 		// Validate ur.Email == "". if invalid respond with 400 status code
 		if ur.Email == "" {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -292,11 +353,28 @@ func main() {
 			return
 		}
 
+		// hash the password using the auth package
+		hashedPassword, err := auth.HashPassword(ur.Password)
+		if err != nil {
+			log.Printf("error hashing password: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// set ur.Password to the hashed password
+		ur.Password = hashedPassword
+
 		// Debug log the email being created
 		log.Printf("CreateUser arg email=%q", ur.Email)
 
-		// Insert the user into the database
-		user, err := apiCfg.dbQueries.CreateUser(r.Context(), ur.Email)
+		// Insert the user email and hashed password into the database
+		user, err := apiCfg.dbQueries.CreateUser(r.Context(), database.CreateUserParams{
+			Email:          ur.Email,
+			HashedPassword: ur.Password,
+		})
 		if err != nil {
 			log.Printf("error inserting user into database: %v", err)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -323,7 +401,104 @@ func main() {
 	// Handle non-POST requests to /api/users with 405
 	mux.HandleFunc("/api/users", methodNotAllowed)
 
-	//mux.HandleFunc("/api/validate_chirp", methodNotAllowed)
+	// Add a POST /api/login endpoint. It should allow a user to log in with their email and password. If both are valid return a 200 ok status code with a JSON response without the password. If the email is not found or the password is incorrect return a 401 status code with a JSON error message.
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		log.Println("POST /api/login start")
+		defer log.Println("POST /api/login end")
+
+		// init struct to hold incoming JSON data
+		type loginRequest struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		// init struct to hold outgoing JSON data
+		type loginResponse struct {
+			ID        string `json:"id"`
+			Email     string `json:"email"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+
+		// decode the JSON body into the loginRequest struct
+		decoder := json.NewDecoder(r.Body)
+		var lr loginRequest
+		err := decoder.Decode(&lr)
+		if err != nil {
+			log.Printf("error decoding JSON: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate lr.Email == "". if invalid respond with 400 status code
+		if lr.Email == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Email is required"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate lr.Password == "". if invalid respond with 400 status code
+		if lr.Password == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Password is required"})
+			w.Write(dat)
+			return
+		}
+
+		// Get the user from the database by email
+		user, err := apiCfg.dbQueries.GetUserByEmail(r.Context(), lr.Email)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusUnauthorized)
+				dat, _ := json.Marshal(map[string]string{"error": "Incorrect email or password"})
+				w.Write(dat)
+				return
+			}
+			log.Printf("error getting user from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Compare the provided password with the hashed password in the database
+		match, err := auth.ComparePasswordHash(lr.Password, user.HashedPassword)
+		if err != nil {
+			log.Printf("error comparing password hash: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Incorrect email or password"})
+			w.Write(dat)
+			return
+		}
+		if !match {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Incorrect email or password"})
+			w.Write(dat)
+			return
+		}
+
+		// If the email and password are valid, respond with a 200 status code and a JSON response without the password
+		resp := loginResponse{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+
+	})
 
 	// Use the server ListenAndServe method to start the server
 	log.Println("Starting server on :8080")
