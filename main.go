@@ -53,6 +53,13 @@ func main() {
 		platform = "dev"
 	}
 
+	// Load jwtSecret from the environemtn and set cfg.jwtSecret
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Println("JWT_SECRET environment variable not set, defaulting to mysecret")
+		jwtSecret = "mysecret"
+	}
+
 	// Create a new http.ServeMux
 	mux := http.NewServeMux()
 
@@ -67,6 +74,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		dbQueries:      database.New(db),
 		platform:       platform,
+		jwtSecret:      jwtSecret,
 	}
 
 	// use NewServeMux .Handle() to add a handler for the root path "/". Use .FileServer as the handler
@@ -108,8 +116,7 @@ func main() {
 
 		// init struct to hold incoming JSON data
 		type chirp struct {
-			Body   string `json:"body"`
-			UserID string `json:"user_id"`
+			Body string `json:"body"`
 		}
 
 		// init struct to hold outgoing JSON data
@@ -121,10 +128,51 @@ func main() {
 			UpdatedAt string `json:"updated_at"`
 		}
 
+		// Handler should only accept valid access token. Add check if non-JWT is sent
+		// If no token is sent respond with 401 status code and a JSON response indicating the error
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// to post chirp user needs to have a valid JWT in the Authorization header
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// detect that bearer token is a JWT before ValidateJWT
+		matched, err := regexp.MatchString(`^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$`, token)
+		if err != nil || !matched {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// validate the token
+		userID, err := auth.ValidateJWT(token, apiCfg.jwtSecret)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
 		// decode the JSON body and user_id into the chirp struct
 		decoder := json.NewDecoder(r.Body)
 		var c chirp
-		err := decoder.Decode(&c)
+
+		err = decoder.Decode(&c)
 		if err != nil {
 			log.Printf("error decoding JSON: %v", err)
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -139,15 +187,6 @@ func main() {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
 			dat, _ := json.Marshal(map[string]string{"error": "Chirp body is required"})
-			w.Write(dat)
-			return
-		}
-
-		// if user_id is empty respond with 400 status code
-		if c.UserID == "" {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusBadRequest)
-			dat, _ := json.Marshal(map[string]string{"error": "User ID is required"})
 			w.Write(dat)
 			return
 		}
@@ -175,11 +214,7 @@ func main() {
 
 		}
 
-		uid, err := uuid.Parse(c.UserID)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid user ID"})
-			return
-		}
+		uid := userID
 
 		// Insert the chirp into the database
 		newChirp, err := apiCfg.dbQueries.CreateChirp(r.Context(), database.CreateChirpParams{
@@ -403,6 +438,7 @@ func main() {
 
 	// Add a POST /api/login endpoint. It should allow a user to log in with their email and password. If both are valid return a 200 ok status code with a JSON response without the password. If the email is not found or the password is incorrect return a 401 status code with a JSON error message.
 	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
 		log.Println("POST /api/login start")
 		defer log.Println("POST /api/login end")
 
@@ -410,14 +446,18 @@ func main() {
 		type loginRequest struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
+			// add optional expires_in_seconds
+			//ExpiresInSeconds int64 `json:"expires_in_seconds"`
 		}
 
 		// init struct to hold outgoing JSON data
 		type loginResponse struct {
-			ID        string `json:"id"`
-			Email     string `json:"email"`
-			CreatedAt string `json:"created_at"`
-			UpdatedAt string `json:"updated_at"`
+			ID           string `json:"id"`
+			Email        string `json:"email"`
+			CreatedAt    string `json:"created_at"`
+			UpdatedAt    string `json:"updated_at"`
+			Token        string `json:"token"`
+			RefreshToken string `json:"refresh_token"`
 		}
 
 		// decode the JSON body into the loginRequest struct
@@ -487,16 +527,193 @@ func main() {
 			return
 		}
 
+		// compute token duration
+		tokenDuration := time.Hour
+
+		// debug log before creating JWT
+		log.Printf("Creating JWT for user ID %v with duration %v", user.ID, tokenDuration)
+
+		// create JWT with secret and expiry
+		tok, err := auth.MakeJWT(user.ID, apiCfg.jwtSecret, tokenDuration)
+		if err != nil {
+			log.Printf("error creating JWT: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// debug log after creating JWT
+		log.Printf("Created JWT for user ID %v", user.ID)
+
+		// debug log before creating refresh token
+		log.Printf("Creating refresh token for user ID %v", user.ID)
+
+		// create random 256-bit hex string. generate random string
+		refreshTok, err := auth.MakeRefreshToken()
+		if err != nil {
+			log.Printf("error creating refresh token: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// debug log before inserting refresh token into database
+		log.Printf("Inserting refresh token into database for user ID %v", user.ID)
+
+		// insert refreshTok into database
+		err = apiCfg.dbQueries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+			Token:     refreshTok,
+			UserID:    user.ID,
+			ExpiresAt: time.Now().UTC().Add(60 * 24 * time.Hour),
+		})
+		if err != nil {
+			log.Printf("error inserting refresh token into database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
 		// If the email and password are valid, respond with a 200 status code and a JSON response without the password
 		resp := loginResponse{
-			ID:        user.ID.String(),
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+			ID:           user.ID.String(),
+			Email:        user.Email,
+			CreatedAt:    user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:    user.UpdatedAt.UTC().Format(time.RFC3339),
+			Token:        tok,
+			RefreshToken: refreshTok,
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(resp)
+
+	})
+
+	// Create a new POST /api/refresh endpoint. Does not accept a request body but does require a refresh token to be present in the headers
+	mux.HandleFunc("POST /api/refresh", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
+		log.Println("POST /api/refresh start")
+		defer log.Println("POST /api/refresh end")
+
+		// init struct to hold outgoing JSON data
+		type refreshResponse struct {
+			Token string `json:"token"`
+		}
+
+		// Get the refresh token from the Authorization header
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// Check if the refresh token exists in the database and is not expired or revoked
+		dbToken, err := apiCfg.dbQueries.GetRefreshToken(r.Context(), token)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusUnauthorized)
+				dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+				w.Write(dat)
+				return
+			}
+			log.Printf("error getting refresh token from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Check if the token is expired
+		if dbToken.ExpiresAt.Before(time.Now().UTC()) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		if dbToken.RevokedAt.Valid {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// Create a new JWT for the user
+		tok, err := auth.MakeJWT(dbToken.UserID, apiCfg.jwtSecret, time.Hour)
+		if err != nil {
+			log.Printf("error creating JWT: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Respond with a 200 status code and a JSON response containing the new JWT
+		resp := refreshResponse{
+			Token: tok,
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+
+	})
+
+	// Create a new POST /api/refresh endpoint. Does not accept a request body but does require a refresh token to be present in the headers
+	mux.HandleFunc("POST /api/revoke", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
+		log.Println("POST /api/revoke start")
+		defer log.Println("POST /api/revoke end")
+
+		// Get the refresh token from the Authorization header
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// Check if the refresh token exists in the database
+		_, err = apiCfg.dbQueries.GetRefreshToken(r.Context(), token)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusUnauthorized)
+				dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+				w.Write(dat)
+				return
+			}
+			log.Printf("error getting refresh token from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Revoke the token by setting the RevokedAt field to the current time. set status 204 and return
+		err = apiCfg.dbQueries.RevokeRefreshToken(r.Context(), token)
+		if err != nil {
+			log.Printf("error revoking refresh token: %v", err)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 
 	})
 
@@ -509,12 +726,12 @@ func main() {
 }
 
 // Create struct that will hold memory data we need to keep track of
-
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
 	// add a field to story PLATFORM environment variable
-	platform string
+	platform  string
+	jwtSecret string
 }
 
 // Create a middleware method on the apiConfig struct that increments the fileserverHits counter every time it's called
@@ -571,8 +788,6 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 }
-
-// Add POST /api/chirps handler that accepts JSON body with "body" field, if chirp is valid save to database with id, created_at, updated_at, body, user_id (use any valid user_id from users table). Return 201 with JSON response containing chirp data. If invalid return 400 with JSON error message.
 
 // methodNotAllowed responds with a 405 Method Not Allowed status code
 func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
