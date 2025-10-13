@@ -21,5 +21,12 @@ LIMIT 1;
 UPDATE users
 SET email = $1, hashed_password = $2, updated_at = NOW()
 WHERE id = $3
-RETURNING id, email, created_at, updated_at;
+RETURNING id, email, created_at, updated_at, is_chirpy_red;
 
+
+-- add database query that upgrades a user to chirpy red based on their id
+-- name: UpgradeUserToChirpyRed :one
+UPDATE users
+SET is_chirpy_red = TRUE, updated_at = NOW()
+WHERE id = $1
+RETURNING id, email, created_at, updated_at, is_chirpy_red;

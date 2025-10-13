@@ -90,3 +90,16 @@ func MakeRefreshToken() (string, error) {
 	return hexStr, nil
 
 }
+
+// add a GETAPIKey function that extracts api key from the header in this format, Authorization: ApiKey <key>. Strip out the "ApiKey" adn the whitespace
+func GetAPIKey(h http.Header) (string, error) {
+	auth := h.Get("Authorization")
+	if auth == "" {
+		return "", fmt.Errorf("no auth header")
+	}
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) != 2 || parts[0] != "ApiKey" || parts[1] == "" {
+		return "", fmt.Errorf("malformed authorization header")
+	}
+	return parts[1], nil
+}

@@ -60,6 +60,9 @@ func main() {
 		jwtSecret = "mysecret"
 	}
 
+	// load POLKA_KEY from the environment
+	polkaKey := os.Getenv("POLKA_KEY")
+
 	// Create a new http.ServeMux
 	mux := http.NewServeMux()
 
@@ -75,6 +78,7 @@ func main() {
 		dbQueries:      database.New(db),
 		platform:       platform,
 		jwtSecret:      jwtSecret,
+		polkaApiKey:    polkaKey,
 	}
 
 	// use NewServeMux .Handle() to add a handler for the root path "/". Use .FileServer as the handler
@@ -350,10 +354,11 @@ func main() {
 
 		// init struct to hold outgoing JSON data
 		type userResponse struct {
-			ID        string `json:"id"`
-			Email     string `json:"email"`
-			CreatedAt string `json:"created_at"`
-			UpdatedAt string `json:"updated_at"`
+			ID          string `json:"id"`
+			Email       string `json:"email"`
+			CreatedAt   string `json:"created_at"`
+			UpdatedAt   string `json:"updated_at"`
+			IsChirpyRed bool   `json:"is_chirpy_red"`
 		}
 
 		// decode the JSON body into the userRequest struct
@@ -422,10 +427,11 @@ func main() {
 		// Respond with a 201 status code and a JSON response containing the user's ID, email, and timestamps
 
 		resp := userResponse{
-			ID:        user.ID.String(),
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+			ID:          user.ID.String(),
+			Email:       user.Email,
+			CreatedAt:   user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:   user.UpdatedAt.UTC().Format(time.RFC3339),
+			IsChirpyRed: user.IsChirpyRed,
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
@@ -458,6 +464,7 @@ func main() {
 			UpdatedAt    string `json:"updated_at"`
 			Token        string `json:"token"`
 			RefreshToken string `json:"refresh_token"`
+			IsChirpyRed  bool   `json:"is_chirpy_red"`
 		}
 
 		// decode the JSON body into the loginRequest struct
@@ -587,6 +594,7 @@ func main() {
 			UpdatedAt:    user.UpdatedAt.UTC().Format(time.RFC3339),
 			Token:        tok,
 			RefreshToken: refreshTok,
+			IsChirpyRed:  user.IsChirpyRed,
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -731,10 +739,11 @@ func main() {
 
 		// init struct to hold outgoing JSON data
 		type userResponse struct {
-			ID        string `json:"id"`
-			Email     string `json:"email"`
-			CreatedAt string `json:"created_at"`
-			UpdatedAt string `json:"updated_at"`
+			ID          string `json:"id"`
+			Email       string `json:"email"`
+			CreatedAt   string `json:"created_at"`
+			UpdatedAt   string `json:"updated_at"`
+			IsChirpyRed bool   `json:"is_chirpy_red"`
 		}
 
 		// Handler should only accept valid access token. Add check if non-JWT is sent
@@ -846,14 +855,202 @@ func main() {
 		// Respond with a 200 status code and a JSON response containing the user's ID, email, and timestamps
 
 		resp := userResponse{
-			ID:        user.ID.String(),
-			Email:     user.Email,
-			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
-			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+			ID:          user.ID.String(),
+			Email:       user.Email,
+			CreatedAt:   user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt:   user.UpdatedAt.UTC().Format(time.RFC3339),
+			IsChirpyRed: user.IsChirpyRed,
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(resp)
+	})
+
+	// Add DELETE /api/users/{chirpID} route to your server that deletes a chirp from the database by its id. Check token in header, only allow deletion if user is the author of the chirp. If successful return 204 status code. If chirp not found return 404 status code. If user is not the author of the chirp return 403 status code
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
+		log.Println("DELETE /api/chirps/{chirpID} start")
+		defer log.Println("DELETE /api/chirps/{chirpID} end")
+
+		// Handler should only accept valid access token. Add check if non-JWT is sent
+		// If no token is sent respond with 401 status code and a JSON response indicating the error
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// to delete chirp needs to have a valid JWT in the Authorization header
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// detect that bearer token is a JWT before ValidateJWT
+		matched, err := regexp.MatchString(`^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$`, token)
+		if err != nil || !matched {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// validate the token
+		userID, err := auth.ValidateJWT(token, apiCfg.jwtSecret)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// Get string value of chirpID using http.Request.PathValue
+		chirpID := r.PathValue("chirpID")
+
+		// debug log string value of chirpID
+		log.Printf("chirpID: %s", chirpID)
+
+		// Parse chirpID
+		cid, err := uuid.Parse(chirpID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Invalid chirp ID"})
+			return
+		}
+
+		// Get the chirp from the database
+		chirp, err := apiCfg.dbQueries.GetChirp(r.Context(), cid)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Chirp not found"})
+				return
+			}
+			log.Printf("error getting chirp from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Check if the user is the author of the chirp
+		if chirp.UserID != userID {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusForbidden)
+			dat, _ := json.Marshal(map[string]string{"error": "Forbidden"})
+			w.Write(dat)
+			return
+		}
+
+		// debug log the chirp ID and user ID
+		log.Printf("Deleting chirp ID %s by user ID %s", cid, userID)
+
+		// Delete the chirp from the database
+		err = apiCfg.dbQueries.DeleteChirp(r.Context(), cid)
+		if err != nil {
+			log.Printf("error deleting chirp from database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// debug log successful deletion
+		log.Printf("Successfully deleted chirp ID %s", cid)
+
+		// If successful return 204 status code
+		w.WriteHeader(http.StatusNoContent)
+
+	})
+
+	// add a POST /api/polka/webhooks endpoint that accepts a JSON body with "event" and "data" fields. If event is anything other than user.upgraded, the endpoint should respond with 204 status. if user.upgraded, update user in database and mark them as chirpy red memeber. if user not found respond with 404 status code. if successful respond with 204 status code and updated user data.
+	mux.HandleFunc("POST /api/polka/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
+		log.Println("POST /api/polka/webhooks start")
+		defer log.Println("POST /api/polka/webhooks end")
+
+		// init struct to hold incoming JSON data
+		type polkaWebhookRequest struct {
+			Event string          `json:"event"`
+			Data  json.RawMessage `json:"data"`
+		}
+		// decode the JSON body into the polkaWebhookRequest struct
+		decoder := json.NewDecoder(r.Body)
+		var pwr polkaWebhookRequest
+		err := decoder.Decode(&pwr)
+		if err != nil {
+			log.Printf("error decoding JSON: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Ensure that the API key in the header matches the one stored in the .env file. If not, respond with 401 status code. Use GetAPIKey function from auth package
+		apiKey, err := auth.GetAPIKey(r.Header)
+		if err != nil || apiKey != apiCfg.polkaApiKey {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// If event is anything other than user.upgraded, the endpoint should respond with 204 status.
+		if pwr.Event != "user.upgraded" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		// If event is user.upgraded, parse data field to get user_id
+		type userUpgradedData struct {
+			UserID string `json:"user_id"`
+		}
+		var uud userUpgradedData
+		err = json.Unmarshal(pwr.Data, &uud)
+		if err != nil {
+			log.Printf("error unmarshaling data field: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Parse user_id
+		uid, err := uuid.Parse(uud.UserID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Invalid user ID"})
+			return
+		}
+
+		// Update user in database and mark them as chirpy red member
+		_, err = apiCfg.dbQueries.UpgradeUserToChirpyRed(r.Context(), uid)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "User not found"})
+				return
+			}
+			log.Printf("error upgrading user to chirpy red: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// If successful respond with 204 status code
+		w.WriteHeader(http.StatusNoContent)
+
 	})
 
 	// Use the server ListenAndServe method to start the server
@@ -869,8 +1066,9 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
 	// add a field to story PLATFORM environment variable
-	platform  string
-	jwtSecret string
+	platform    string
+	jwtSecret   string
+	polkaApiKey string
 }
 
 // Create a middleware method on the apiConfig struct that increments the fileserverHits counter every time it's called
