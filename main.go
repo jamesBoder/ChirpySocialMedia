@@ -717,6 +717,145 @@ func main() {
 
 	})
 
+	// Add a PUT /api/users endpoint that allows a user to update their email and/or password. It requires a access token in the header and a new password and email in the request body. Hash the password, then update the hashed password and the email in the database. Return a 200 status code if everything is successful and the newly updated User data. Respond with a 401 status code if the access token is invalid or missing.
+	mux.HandleFunc("PUT /api/users", func(w http.ResponseWriter, r *http.Request) {
+		//debugging logs *****
+		log.Println("PUT /api/users start")
+		defer log.Println("PUT /api/users end")
+
+		// init struct to hold incoming JSON data
+		type userRequest struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		// init struct to hold outgoing JSON data
+		type userResponse struct {
+			ID        string `json:"id"`
+			Email     string `json:"email"`
+			CreatedAt string `json:"created_at"`
+			UpdatedAt string `json:"updated_at"`
+		}
+
+		// Handler should only accept valid access token. Add check if non-JWT is sent
+		// If no token is sent respond with 401 status code and a JSON response indicating the error
+		if r.Header.Get("Authorization") == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// to put user needs to have a valid JWT in the Authorization header
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// detect that bearer token is a JWT before ValidateJWT
+		matched, err := regexp.MatchString(`^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$`, token)
+		if err != nil || !matched {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// validate the token
+		userID, err := auth.ValidateJWT(token, apiCfg.jwtSecret)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusUnauthorized)
+			dat, _ := json.Marshal(map[string]string{"error": "Unauthorized"})
+			w.Write(dat)
+			return
+		}
+
+		// decode the JSON body into the userRequest struct
+		decoder := json.NewDecoder(r.Body)
+		var ur userRequest
+
+		err = decoder.Decode(&ur)
+		if err != nil {
+			log.Printf("error decoding JSON: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate ur.Password == "". if invalid respond with 400 status code
+		if ur.Password == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Password is required"})
+			w.Write(dat)
+			return
+		}
+
+		// Validate ur.Email == "". if invalid respond with 400 status code
+		if ur.Email == "" {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			dat, _ := json.Marshal(map[string]string{"error": "Email is required"})
+			w.Write(dat)
+			return
+		}
+
+		// hash the password using the auth package
+		hashedPassword, err := auth.HashPassword(ur.Password)
+		if err != nil {
+			log.Printf("error hashing password: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// set ur.Password to the hashed password
+		ur.Password = hashedPassword
+
+		uid := userID
+
+		// Debug log the email being updated
+		log.Printf("UpdateUser arg email=%q", ur.Email)
+
+		// Update the user email and hashed password in the database
+		user, err := apiCfg.dbQueries.UpdateUser(r.Context(), database.UpdateUserParams{
+			ID:             uid,
+			Email:          ur.Email,
+			HashedPassword: ur.Password,
+		})
+		if err != nil {
+			log.Printf("error updating user in database: %v", err)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+			w.Write(dat)
+			return
+		}
+
+		// Respond with a 200 status code and a JSON response containing the user's ID, email, and timestamps
+
+		resp := userResponse{
+			ID:        user.ID.String(),
+			Email:     user.Email,
+			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339),
+			UpdatedAt: user.UpdatedAt.UTC().Format(time.RFC3339),
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	})
+
 	// Use the server ListenAndServe method to start the server
 	log.Println("Starting server on :8080")
 	if err := srv.ListenAndServe(); err != nil {
