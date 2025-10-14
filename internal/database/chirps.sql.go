@@ -98,6 +98,49 @@ func (q *Queries) GetAllChirps(ctx context.Context) ([]GetAllChirpsRow, error) {
 	return items, nil
 }
 
+const getAllChirpsDesc = `-- name: GetAllChirpsDesc :many
+SELECT id, body, user_id, created_at, updated_at
+FROM chirps
+ORDER BY created_at DESC
+`
+
+type GetAllChirpsDescRow struct {
+	ID        uuid.UUID
+	Body      string
+	UserID    uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) GetAllChirpsDesc(ctx context.Context) ([]GetAllChirpsDescRow, error) {
+	rows, err := q.db.QueryContext(ctx, getAllChirpsDesc)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAllChirpsDescRow
+	for rows.Next() {
+		var i GetAllChirpsDescRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Body,
+			&i.UserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getChirp = `-- name: GetChirp :one
 SELECT id, body, user_id, created_at, updated_at
 FROM chirps
@@ -123,4 +166,48 @@ func (q *Queries) GetChirp(ctx context.Context, id uuid.UUID) (GetChirpRow, erro
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getChirpsByAuthor = `-- name: GetChirpsByAuthor :many
+SELECT id, body, user_id, created_at, updated_at
+FROM chirps
+WHERE user_id = $1
+ORDER BY created_at ASC
+`
+
+type GetChirpsByAuthorRow struct {
+	ID        uuid.UUID
+	Body      string
+	UserID    uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+func (q *Queries) GetChirpsByAuthor(ctx context.Context, userID uuid.UUID) ([]GetChirpsByAuthorRow, error) {
+	rows, err := q.db.QueryContext(ctx, getChirpsByAuthor, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetChirpsByAuthorRow
+	for rows.Next() {
+		var i GetChirpsByAuthorRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Body,
+			&i.UserID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

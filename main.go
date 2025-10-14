@@ -90,8 +90,12 @@ func main() {
 
 	mux.Handle("/app/", handler) // serves other assets under /app/
 
-	// catch-all 404 so unmatched methods don’t hit the file server
+	// Handle root path - redirect GET requests to /app/, return 404 for others
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" && r.Method == http.MethodGet {
+			http.Redirect(w, r, "/app/", http.StatusMovedPermanently)
+			return
+		}
 		http.NotFound(w, r)
 	})
 
@@ -141,6 +145,9 @@ func main() {
 			w.Write(dat)
 			return
 		}
+
+		// debug log the Authorization header
+		log.Printf("Authorization header: %s", r.Header.Get("Authorization"))
 
 		// to post chirp user needs to have a valid JWT in the Authorization header
 		token, err := auth.GetBearerToken(r.Header)
@@ -248,8 +255,6 @@ func main() {
 
 	})
 
-	//mux.HandleFunc("/api/chirps", methodNotAllowed) // handled in the function above
-
 	// Add GET /api/chirps handler that returns a JSON array of all chirps in the database, ordered by created_at ascending order. Each chirp should include id, created_at, updated_at, body, user_id
 	mux.HandleFunc("GET /api/chirps", func(w http.ResponseWriter, r *http.Request) {
 		// Define a struct to hold the chirp data
@@ -259,8 +264,101 @@ func main() {
 			UserID    string `json:"user_id"`
 			CreatedAt string `json:"created_at"`
 			UpdatedAt string `json:"updated_at"`
+			AuthorID  string `json:"author_id,omitempty"`
+			// optional sort field
+			Sort string `json:"sort,omitempty"`
 		}
 
+		// check query parameter author_id if provided. If provided filter chirps by author_id. if not provided return all chirps
+
+		authorID := r.URL.Query().Get("author_id")
+		if authorID != "" {
+			// Parse authorID
+			aid, err := uuid.Parse(authorID)
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "Invalid author ID"})
+				return
+			}
+
+			// Get all chirps from the database by author_id ordered by created_at ascending
+			chirps, err := apiCfg.dbQueries.GetChirpsByAuthor(r.Context(), aid)
+			if err != nil {
+				log.Printf("error getting chirps from database: %v", err)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+				w.Write(dat)
+				return
+			}
+
+			// Create a slice to hold the chirp responses
+			var resp []chirpResponse
+			// Loop through the chirps and append them to the response slice
+			for _, c := range chirps {
+				resp = append(resp, chirpResponse{
+					ID:        c.ID.String(),
+					Body:      c.Body,
+					UserID:    c.UserID.String(),
+					CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339),
+					UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
+					AuthorID:  authorID,
+				})
+			}
+
+			// Respond with a 200 status code and a JSON array of chirps
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// If sort query parameter is provided and equals "desc", return chirps in descending order. if it equals "asc" or is not provided return in ascending order
+		sort := r.URL.Query().Get("sort")
+		if sort != "" && sort != "asc" && sort != "desc" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid sort parameter"})
+			return
+		}
+		// add sort to chirpResponse if provided
+		_ = sort // currently not used but could be added to response if needed
+		log.Printf("sort parameter: %s", sort)
+		// if sort == "desc" get chirps in descending order
+		if sort == "desc" {
+			chirps, err := apiCfg.dbQueries.GetAllChirpsDesc(r.Context())
+			if err != nil {
+				log.Printf("error getting chirps from database: %v", err)
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				dat, _ := json.Marshal(map[string]string{"error": "Something went wrong"})
+				w.Write(dat)
+				return
+			}
+
+			// Create a slice to hold the chirp responses
+			var resp []chirpResponse
+			// Loop through the chirps and append them to the response slice
+			for _, c := range chirps {
+				resp = append(resp, chirpResponse{
+					ID:        c.ID.String(),
+					Body:      c.Body,
+					UserID:    c.UserID.String(),
+					CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339),
+					UpdatedAt: c.UpdatedAt.UTC().Format(time.RFC3339),
+					Sort:      sort,
+				})
+			}
+
+			// Respond with a 200 status code and a JSON array of chirps
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		// Default behavior is ascending order
+		// log the sort parameter
+		log.Printf("No author_id provided, returning all chirps in ascending order")
+
+		// If no author_id query parameter is provided, return all chirps
 		// Get all chirps from the database ordered by created_at ascending
 		chirps, err := apiCfg.dbQueries.GetAllChirps(r.Context())
 		if err != nil {
