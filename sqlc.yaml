@@ -1,7 +1,9 @@
 version: "2"
 sql:
-  - schema: "sql/schema"
-    queries: "sql/queries"
+  - schema:
+      - "sql/schema/000_all.sql"
+    queries:
+      - "sql/queries/*.sql"
     engine: "postgresql"
     gen:
       go:
