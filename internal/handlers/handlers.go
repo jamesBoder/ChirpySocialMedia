@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jamesboder/ChirpySocialMedia/internal/auth"
-	"github.com/jamesboder/ChirpySocialMedia/internal/database"
 	"github.com/jamesboder/ChirpySocialMedia/internal/respond"
 )
 
@@ -16,11 +15,11 @@ var jwtPattern = regexp.MustCompile(`^[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0
 
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	DB          *database.Queries
-	JWTSecret   string
-	PolkaKey    string
-	Platform    string
-	FileHits    atomic.Int32
+	DB        Store
+	JWTSecret string
+	PolkaKey  string
+	Platform  string
+	FileHits  atomic.Int32
 }
 
 // requireAuth extracts and validates the JWT from the Authorization header.
