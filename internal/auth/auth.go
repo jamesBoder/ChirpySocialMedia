@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
+
+// ErrInvalidToken is returned when a token string does not match the expected JWT format.
+var ErrInvalidToken = errors.New("invalid token format")
 
 func HashPassword(password string) (string, error) {
 	// Hash password using argon2id.CreateHash
