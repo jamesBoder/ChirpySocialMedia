@@ -7,6 +7,7 @@ import (
 
 // Config holds all environment-based configuration for the server.
 type Config struct {
+	Addr      string
 	DBURL     string
 	Platform  string
 	JWTSecret string
@@ -31,7 +32,13 @@ func Load() (*Config, error) {
 		platform = "dev"
 	}
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8888"
+	}
+
 	return &Config{
+		Addr:      ":" + port,
 		DBURL:     dbURL,
 		Platform:  platform,
 		JWTSecret: jwtSecret,
