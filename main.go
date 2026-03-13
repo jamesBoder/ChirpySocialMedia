@@ -4,10 +4,12 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/jamesboder/ChirpySocialMedia/internal/config"
 	"github.com/jamesboder/ChirpySocialMedia/internal/database"
 	"github.com/jamesboder/ChirpySocialMedia/internal/handlers"
+	"github.com/jamesboder/ChirpySocialMedia/internal/middleware"
 	"github.com/joho/godotenv"
 
 	_ "github.com/lib/pq"
@@ -39,8 +41,20 @@ func main() {
 	mux := http.NewServeMux()
 	registerRoutes(mux, h)
 
-	log.Println("Starting server on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	logger := log.New(os.Stdout, "", log.LstdFlags)
+	corsOrigin := os.Getenv("CORS_ORIGIN")
+	if corsOrigin == "" {
+		corsOrigin = "*"
+	}
+
+	handler := middleware.Chain(mux,
+		middleware.Recover(logger),
+		middleware.Logger(logger),
+		middleware.CORS(corsOrigin),
+	)
+
+	log.Printf("Starting server on %s", cfg.Addr)
+	if err := http.ListenAndServe(cfg.Addr, handler); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }
