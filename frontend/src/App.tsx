@@ -10,8 +10,8 @@ import Profile from './features/profile/Profile'
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <div className="min-h-screen bg-gray-50">
+      <BrowserRouter basename="/app">
+        <div className="min-h-screen">
           <Header />
           <main className="max-w-2xl mx-auto px-4 py-6">
             <Routes>

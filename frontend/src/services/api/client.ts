@@ -21,7 +21,7 @@ api.interceptors.response.use(
       localStorage.removeItem('token')
       localStorage.removeItem('refresh_token')
       localStorage.removeItem('user')
-      window.location.href = '/login'
+      window.location.href = '/app/login'
     }
     return Promise.reject(error)
   },
