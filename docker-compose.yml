@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: chirpy
+      POSTGRES_USER: chirpy
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5434:5432"
+    volumes:
+      - chirpy_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chirpy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8888:8888"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: postgres://chirpy:dev@db:5432/chirpy?sslmode=disable
+      PLATFORM: dev
+      JWT_SECRET: change-me-for-production
+      POLKA_KEY: f271c81ff7084ee5b99a5091b42d486e
+      CORS_ORIGIN: http://localhost:8888
+
+volumes:
+  chirpy_data:
