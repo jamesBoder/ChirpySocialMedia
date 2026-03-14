@@ -61,7 +61,7 @@ func main() {
 
 func registerRoutes(mux *http.ServeMux, h *handlers.Handler) {
 	// File server at /app/
-	fsHandler := h.MetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("."))))
+	fsHandler := h.MetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir("./frontend/dist"))))
 	mux.Handle("GET /app", http.RedirectHandler("/app/", http.StatusMovedPermanently))
 	mux.Handle("/app/", fsHandler)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

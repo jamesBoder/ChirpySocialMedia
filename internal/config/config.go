@@ -19,6 +19,9 @@ type Config struct {
 func Load() (*Config, error) {
 	dbURL := os.Getenv("DB_URL")
 	if dbURL == "" {
+		dbURL = os.Getenv("DATABASE_URL")
+	}
+	if dbURL == "" {
 		return nil, errors.New("DB_URL environment variable not set")
 	}
 
