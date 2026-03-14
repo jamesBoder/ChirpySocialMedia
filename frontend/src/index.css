@@ -4,6 +4,8 @@
 
 @layer base {
   body {
-    @apply text-gray-900 antialiased;
+    @apply text-gray-900 antialiased min-h-screen;
+    background: linear-gradient(160deg, #c4b5fd 0%, #e0e7ff 50%, #bfdbfe 100%);
+    background-attachment: fixed;
   }
 }

@@ -24,7 +24,7 @@ export default function ChirpCard({ chirp, onDelete }: Props) {
   const isOwner = user?.id === chirp.user_id
 
   return (
-    <article className="bg-white border border-gray-100 rounded-2xl px-5 py-4 shadow-sm hover:shadow transition-shadow">
+    <article className="bg-white/80 backdrop-blur-sm border border-chirpy-200 border-l-4 border-l-chirpy-400 rounded-2xl px-5 py-4 shadow-sm hover:shadow-md hover:border-l-chirpy-500 transition-all">
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <p className="text-gray-800 text-sm leading-relaxed whitespace-pre-wrap break-words">

@@ -42,7 +42,7 @@ export default function Profile() {
 
       <form
         onSubmit={handleSubmit}
-        className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4"
+        className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-chirpy-200 p-6 space-y-4"
       >
         {success && (
           <p className="text-sm text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2">

@@ -34,7 +34,7 @@ export default function Login() {
   return (
     <div className="max-w-sm mx-auto mt-10">
       <h1 className="text-2xl font-bold text-gray-800 mb-6 text-center">Welcome back</h1>
-      <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+      <form onSubmit={handleSubmit} className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-sm border border-chirpy-200 p-6 space-y-4">
         {error && (
           <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             {error}

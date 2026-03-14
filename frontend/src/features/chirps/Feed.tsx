@@ -71,7 +71,7 @@ export default function Feed() {
       {isAuthenticated ? (
         <form
           onSubmit={handlePost}
-          className="bg-white border border-gray-100 rounded-2xl px-5 py-4 shadow-sm space-y-3"
+          className="bg-white/80 backdrop-blur-sm border border-chirpy-200 rounded-2xl px-5 py-4 shadow-sm space-y-3"
         >
           <textarea
             value={body}
@@ -96,7 +96,7 @@ export default function Feed() {
           </div>
         </form>
       ) : (
-        <div className="bg-white border border-gray-100 rounded-2xl px-5 py-4 shadow-sm text-sm text-gray-500">
+        <div className="bg-white/80 backdrop-blur-sm border border-chirpy-200 rounded-2xl px-5 py-4 shadow-sm text-sm text-gray-500">
           <Link to="/login" className="text-chirpy-600 font-medium hover:underline">Sign in</Link>
           {' '}or{' '}
           <Link to="/register" className="text-chirpy-600 font-medium hover:underline">create an account</Link>
